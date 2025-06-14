@@ -1,65 +1,64 @@
-const express = require("express");
-const multer = require("multer");
-const cors = require("cors");
-const ffmpeg = require("fluent-ffmpeg");
-const fs = require("fs");
-const path = require("path");
+const express = require('express');
+const multer = require('multer');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
+// Middleware de upload com multer
+const upload = multer({ dest: 'uploads/' });
 
-const upload = multer({
-  dest: "uploads/",
-  limits: { fileSize: 200 * 1024 * 1024 }, // 200MB max
+// 🟢 Rota de "ping" para manter o servidor ativo
+app.get('/ping', (req, res) => {
+  res.status(200).send('Servidor ativo ✅');
 });
 
-app.post("/start-live", upload.single("video"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Nenhum arquivo enviado" });
+// 🎬 Rota principal para receber o vídeo e iniciar live
+app.post('/render-server', upload.single('video'), (req, res) => {
+  const videoPath = req.file?.path;
+  const streamUrl = req.body?.streamUrl;
+
+  if (!videoPath || !streamUrl) {
+    return res.status(400).json({ success: false, error: 'Faltando vídeo ou URL de stream.' });
   }
 
-  const streamUrl = req.body.stream_url;
-  if (!streamUrl) {
-    fs.unlinkSync(req.file.path);
-    return res.status(400).json({ error: "stream_url é obrigatório" });
-  }
+  console.log(`🎥 Iniciando transmissão para: ${streamUrl}`);
 
-  const videoPath = req.file.path;
+  const ffmpeg = spawn('ffmpeg', [
+    '-re',
+    '-i', videoPath,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-maxrate', '3000k',
+    '-bufsize', '6000k',
+    '-pix_fmt', 'yuv420p',
+    '-g', '50',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
+    '-f', 'flv',
+    streamUrl
+  ]);
 
-  ffmpeg(videoPath)
-    .inputOptions("-re")
-    .outputOptions([
-      "-c:v libx264",
-      "-preset veryfast",
-      "-maxrate 3000k",
-      "-bufsize 6000k",
-      "-pix_fmt yuv420p",
-      "-g 50",
-      "-c:a aac",
-      "-b:a 128k",
-      "-ar 44100",
-      "-f flv",
-    ])
-    .output(streamUrl)
-    .on("start", (cmd) => {
-      console.log("FFmpeg iniciado:", cmd);
-      res.json({ message: "Transmissão iniciada" });
-    })
-    .on("error", (err) => {
-      console.error("Erro FFmpeg:", err.message);
-      fs.unlinkSync(videoPath);
-      // Como já respondeu no start, não dá pra responder aqui de novo
-    })
-    .on("end", () => {
-      console.log("Transmissão finalizada");
-      fs.unlinkSync(videoPath);
-    })
-    .run();
+  ffmpeg.stderr.on('data', data => {
+    console.log(`[FFmpeg] ${data}`);
+  });
+
+  ffmpeg.on('close', code => {
+    console.log(`🛑 Transmissão encerrada com código ${code}`);
+    // Remove vídeo temporário
+    fs.unlink(videoPath, err => {
+      if (err) console.error('Erro ao remover vídeo:', err);
+      else console.log('🗑️ Vídeo temporário removido');
+    });
+  });
+
+  res.json({ success: true, message: 'Transmissão iniciada!' });
 });
 
+// Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor Node.js rodando em http://localhost:${PORT}`);
 });
