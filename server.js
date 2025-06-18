@@ -7,20 +7,28 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware de upload com multer
+// Middleware para permitir receber dados form-data e JSON
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Configuração do multer para upload na pasta 'uploads'
 const upload = multer({ dest: 'uploads/' });
 
-// 🟢 Rota de "ping" para manter o servidor ativo
+// Rota para "ping" (manter servidor ativo)
 app.get('/ping', (req, res) => {
   res.status(200).send('Servidor ativo ✅');
 });
 
-// 🎬 Rota principal para receber o vídeo e iniciar live
+// Rota para receber vídeo e iniciar live
 app.post('/render-server', upload.single('video'), (req, res) => {
   const videoPath = req.file?.path;
-  const streamUrl = req.body?.streamUrl;
+  const streamUrl = req.body?.stream_url || req.body?.streamUrl;
 
   if (!videoPath || !streamUrl) {
+    // Remover arquivo se foi recebido, mas faltou streamUrl
+    if (videoPath) {
+      fs.unlink(videoPath, () => {});
+    }
     return res.status(400).json({ success: false, error: 'Faltando vídeo ou URL de stream.' });
   }
 
@@ -43,18 +51,19 @@ app.post('/render-server', upload.single('video'), (req, res) => {
   ]);
 
   ffmpeg.stderr.on('data', data => {
-    console.log(`[FFmpeg] ${data}`);
+    console.log(`[FFmpeg] ${data.toString()}`);
   });
 
   ffmpeg.on('close', code => {
     console.log(`🛑 Transmissão encerrada com código ${code}`);
-    // Remove vídeo temporário
+
     fs.unlink(videoPath, err => {
       if (err) console.error('Erro ao remover vídeo:', err);
       else console.log('🗑️ Vídeo temporário removido');
     });
   });
 
+  // Enviar resposta imediata para não travar o PHP
   res.json({ success: true, message: 'Transmissão iniciada!' });
 });
 
